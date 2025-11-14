@@ -1,30 +1,3 @@
-<!--
-  Production-ready single-file immersive novel
-  Developer notes:
-  - Place your story JSON at /story/story.json (see sample structure below)
-  - Put background images under /assets/bg/ (use relative paths in JSON)
-  - Put BGM at /assets/music/bgm.mp3 (or change BGM_SRC constant)
-  - The page auto-loads story.json and assets; no sidebar is shown to the player.
-
-  sample story.json structure:
-  {
-    "scenes": [
-      {
-        "title": "序章",
-        "bg": "assets/bg/night.jpg",
-        "lines": ["第一行。", "第二行。"],
-        "choices": [{"text":"走向燈塔","goto":1}]
-      },
-      {
-        "title": "燈塔",
-        "bg": "assets/bg/tower.jpg",
-        "lines": ["燈塔裡..."],
-        "reveal": true,
-        "gift": "生日快樂！這是你的驚喜文字或連結。"
-      }
-    ]
-  }
--->
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -59,9 +32,7 @@
   <main class="stage" id="stage">
     <div id="bg" class="bg"></div>
     <div class="vignette"></div>
-
     <div class="choices" id="choices" aria-hidden="true"></div>
-
     <section class="textPanel" id="textPanel" role="region" aria-live="polite">
       <div class="titleRow">
         <div class="sceneTitle" id="sceneTitle">正在載入...</div>
@@ -76,26 +47,48 @@
     </section>
   </main>
 </div>
-
-<!-- reveal modal container -->
 <div id="modalRoot" class="hidden"></div>
 
 <script>
-// ========== CONFIG (developer editable) ==========
-const STORY_PATH = './story/story.json'; // developer: place your story here
-const BGM_SRC = './assets/music/bgm.mp3'; // developer: place bgm here (or empty to disable)
-const DEFAULT_BG = ''; // optional default background
-const AUTO_LINE_DELAY = 2500; // ms per line during auto-play
-const TOTAL_SECONDS = 5 * 60; // 5 minutes
+// ========== CONFIG ==========
+const BGM_SRC = ''; // 如果有音樂，把網址填這裡，否則留空
+const DEFAULT_BG = '';
+const AUTO_LINE_DELAY = 2500;
+const TOTAL_SECONDS = 5*60;
 
 // ========== state ==========
-let story = null;
-let currentScene = 0;
-let currentLine = 0;
-let autoPlaying = false;
-let totalSeconds = TOTAL_SECONDS;
-let timerInterval = null;
-let audio = null;
+let story = {
+  scenes:[
+    {
+      title:'夜的引導者',
+      bg:'',
+      lines:[
+        '夜色像一張柔軟的布，輕輕蓋在城市上。',
+        '一封沒有署名的信出現在你枕邊，裡面只寫了幾個字：跟我來。'
+      ]
+    },
+    {
+      title:'碼頭',
+      bg:'',
+      lines:[
+        '潮汐低落，露出了濕冷的木板。',
+        '遠方的燈塔閃爍，像是等待著你的回應。'
+      ],
+      choices:[{text:'走向燈塔', goto:2},{text:'坐在碼頭', goto:3}]
+    },
+    {
+      title:'燈塔',
+      bg:'',
+      lines:[
+        '燈塔裡有一張小紙條，摺成飛機的樣子。',
+        '上面寫著：生日快樂 — 這是我為你準備的小禮。'
+      ],
+      reveal:true,
+      gift:'生日快樂！這份禮物是：一張手工明信片和你最喜歡的曲子。'
+    }
+  ]
+};
+let currentScene=0,currentLine=0,autoPlaying=false,totalSeconds=TOTAL_SECONDS,timerInterval=null,audio=null;
 
 // ========== elements ==========
 const sceneTitleEl = document.getElementById('sceneTitle');
@@ -109,122 +102,61 @@ const skipBtn = document.getElementById('skipBtn');
 const modalRoot = document.getElementById('modalRoot');
 
 // ========== helpers ==========
-function formatTime(sec){
-  const m = String(Math.floor(sec/60)).padStart(2,'0');
-  const s = String(sec%60).padStart(2,'0');
-  return `${m}:${s}`;
-}
+function formatTime(sec){return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;}
+function startTimer(){clearInterval(timerInterval);totalSeconds=TOTAL_SECONDS;timeEl.textContent=formatTime(totalSeconds);
+timerInterval=setInterval(()=>{totalSeconds--;timeEl.textContent=formatTime(totalSeconds);if(totalSeconds<=0){clearInterval(timerInterval);endStory();}},1000);}
+function endStory(){lineEl.textContent='故事結束 — 希望你喜歡這份小禮物。';stopAudio();}
+function playAudio(src){if(!src) return; try{audio=new Audio(src);audio.loop=true;audio.volume=0.6;audio.play().catch(()=>{});}catch(e){console.warn(e)}}
+function stopAudio(){if(audio){audio.pause();audio=null;}}
 
-function startTimer(){
-  clearInterval(timerInterval);
-  totalSeconds = TOTAL_SECONDS;
-  timeEl.textContent = formatTime(totalSeconds);
-  timerInterval = setInterval(()=>{
-    totalSeconds--;
-    timeEl.textContent = formatTime(totalSeconds);
-    if(totalSeconds<=0){ clearInterval(timerInterval); endStory(); }
-  },1000);
-}
-
-function endStory(){
-  lineEl.textContent = '故事結束 — 希望你喜歡這份小禮物。';
-  stopAudio();
-}
-
-function playAudio(src){
-  if(!src) return;
-  try{
-    audio = new Audio(src);
-    audio.loop = true;
-    audio.volume = 0.6;
-    audio.play().catch(e=>{/* autoplay may be blocked; ignore */});
-  }catch(e){ console.warn('無法播放音樂', e); }
-}
-function stopAudio(){ if(audio){ audio.pause(); audio=null; } }
-
-async function fetchStory(){
-  try{
-    const resp = await fetch(STORY_PATH, {cache:'no-store'});
-    if(!resp.ok) throw new Error('無法載入 story.json');
-    const json = await resp.json();
-    return json;
-  }catch(e){ console.error(e); return null; }
-}
-
-// smooth background change
-function setBackground(url){
-  if(!url){ if(DEFAULT_BG) bgEl.style.backgroundImage = `url(${DEFAULT_BG})`; else bgEl.style.backgroundImage = ''; return; }
-  const img = new Image(); img.src = url;
-  img.onload = ()=>{ bgEl.style.backgroundImage = `url(${url})`; };
-}
+function setBackground(url){if(!url){bgEl.style.backgroundImage=''; return;} const img=new Image(); img.src=url; img.onload=()=>{bgEl.style.backgroundImage=`url(${url})`;};}
 
 function renderChoices(scene){
-  choicesEl.innerHTML = '';
+  choicesEl.innerHTML='';
   if(scene.choices && scene.choices.length){
     choicesEl.setAttribute('aria-hidden','false');
     scene.choices.forEach(c=>{
-      const btn = document.createElement('button');
-      btn.className = 'choiceBtn';
-      btn.textContent = c.text;
-      btn.onclick = ()=>{ currentScene = c.goto; currentLine=0; renderCurrent(); };
+      const btn=document.createElement('button');
+      btn.className='choiceBtn';
+      btn.textContent=c.text;
+      btn.onclick=()=>{currentScene=c.goto;currentLine=0;renderCurrent();};
       choicesEl.appendChild(btn);
     });
-  } else {
-    choicesEl.setAttribute('aria-hidden','true');
-  }
+  } else {choicesEl.setAttribute('aria-hidden','true');}
 }
 
 function showReveal(msg){
-  modalRoot.innerHTML = '';
-  const modal = document.createElement('div'); modal.className='modal';
-  const box = document.createElement('div'); box.className='modalBox';
-  box.innerHTML = `<h3>驚喜 🎁</h3><div style="margin-top:10px">${msg}</div><div style="margin-top:14px"><button id='closeReveal'>關閉</button></div>`;
+  modalRoot.innerHTML='';
+  const modal=document.createElement('div'); modal.className='modal';
+  const box=document.createElement('div'); box.className='modalBox';
+  box.innerHTML=`<h3>驚喜 🎁</h3><div style="margin-top:10px">${msg}</div><div style="margin-top:14px"><button id='closeReveal'>關閉</button></div>`;
   modal.appendChild(box); modalRoot.appendChild(modal); modalRoot.classList.remove('hidden');
-  document.getElementById('closeReveal').onclick = ()=>{ modalRoot.innerHTML=''; modalRoot.classList.add('hidden'); };
+  document.getElementById('closeReveal').onclick=()=>{modalRoot.innerHTML='';modalRoot.classList.add('hidden');};
 }
 
 function renderCurrent(){
-  const s = story.scenes[currentScene];
-  if(!s) return endStory();
-  sceneTitleEl.textContent = s.title || `章節 ${currentScene+1}`;
-  setBackground(s.bg || '');
-  currentLine = Math.min(currentLine, (s.lines||[]).length - 1);
-  lineEl.textContent = s.lines ? s.lines[currentLine] : '';
+  const s=story.scenes[currentScene]; if(!s) return endStory();
+  sceneTitleEl.textContent=s.title || `章節 ${currentScene+1}`;
+  setBackground(s.bg||'');
+  currentLine=Math.min(currentLine,(s.lines||[]).length-1);
+  lineEl.textContent=s.lines ? s.lines[currentLine] : '';
   renderChoices(s);
-  if(s.reveal){ showReveal(s.gift || ''); }
+  if(s.reveal) showReveal(s.gift || '');
 }
 
-function step(){
-  const s = story.scenes[currentScene];
-  if(!s) return endStory();
-  if(currentLine < (s.lines||[]).length - 1){ currentLine++; lineEl.textContent = s.lines[currentLine]; }
-  else {
-    if(s.choices && s.choices.length){ /* wait for player choice */ }
-    else if(currentScene < story.scenes.length - 1){ currentScene++; currentLine=0; renderCurrent(); }
-    else endStory();
-  }
-}
+function step(){const s=story.scenes[currentScene]; if(!s) return endStory();
+if(currentLine<(s.lines||[]).length-1){currentLine++; lineEl.textContent=s.lines[currentLine];}
+else{if(s.choices&&s.choices.length){} else if(currentScene<story.scenes.length-1){currentScene++;currentLine=0;renderCurrent();}else endStory();}}
 
-function autoFlow(){
-  if(!autoPlaying) return;
-  step();
-  setTimeout(()=>{ if(autoPlaying) autoFlow(); }, AUTO_LINE_DELAY);
-}
+function autoFlow(){if(!autoPlaying) return; step(); setTimeout(()=>{if(autoPlaying) autoFlow();},AUTO_LINE_DELAY);}
 
 // ========== UI events ==========
-nextBtn.onclick = ()=>{ if(!story) return; step(); };
-autoBtn.onclick = ()=>{ if(!story) return; autoPlaying = !autoPlaying; autoBtn.textContent = autoPlaying ? '停止自動' : '自動播放'; if(autoPlaying) autoFlow(); };
-skipBtn.onclick = ()=>{ if(!story) return; for(let i=0;i<4;i++) step(); };
+nextBtn.onclick=()=>{step();};
+autoBtn.onclick=()=>{autoPlaying=!autoPlaying; autoBtn.textContent=autoPlaying?'停止自動':'自動播放'; if(autoPlaying) autoFlow();};
+skipBtn.onclick=()=>{for(let i=0;i<4;i++) step();};
 
 // ========== initialization ==========
-(async function init(){
-  const json = await fetchStory();
-  if(!json){ sceneTitleEl.textContent = '載入失敗，請確認 story/story.json 是否存在'; lineEl.textContent = '' ; return; }
-  story = json; currentScene = 0; currentLine = 0; renderCurrent(); startTimer();
-  // try to play bgm (developer provides file)
-  if(BGM_SRC) playAudio(BGM_SRC);
-})();
-
+(function init(){currentScene=0;currentLine=0;renderCurrent();startTimer();if(BGM_SRC) playAudio(BGM_SRC);})();
 </script>
 </body>
 </html>
